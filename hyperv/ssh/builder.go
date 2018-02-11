@@ -298,13 +298,11 @@ func (b *Builder) Prepare(raws ...interface{}) ([]string, error) {
 func (b *Builder) Run(ui packer.Ui, hook packer.Hook, cache packer.Cache) (packer.Artifact, error) {
 	ui.Say(fmt.Sprintf("Connecting to %s as %s...", b.config.HyperVServer, b.config.HyperVUsername))
 	b.ps = pssh.Connect(b.config.HyperVServer, b.config.HyperVUsername, b.config.HyperVPassword)
-	output, err := b.ps.Output("$env:COMPUTERNAME")
-	o, err := b.ps.Output("$env:USERNAME")
-	output += o
+	_, err := NewHypervPSSHDriver(b.ps)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	ui.Say(output)
+	b.ps.Disconnect()
 	return nil, nil
 }
 
