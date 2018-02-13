@@ -62,7 +62,16 @@ func (ps *PowershellSession) Output(script string) (string, error) {
 }
 
 func encodedCommand(script string) string {
-	return fmt.Sprintf(`powershell -encodedcommand %s`, base64.StdEncoding.EncodeToString(toByteSlice(utf16.Encode([]rune(script)))))
+	wrappedScript := fmt.Sprintf(`function RunScript {
+		[CmdletBinding()]
+		param()
+		%s
+	} RunScript -ErrorAction Stop `, script)
+	return fmt.Sprintf(`powershell -encodedcommand %s`, base64Utf16Encode(wrappedScript))
+}
+
+func base64Utf16Encode(str string) string {
+	return base64.StdEncoding.EncodeToString(toByteSlice(utf16.Encode([]rune(str))))
 }
 
 func toByteSlice(vals []uint16) []byte {
