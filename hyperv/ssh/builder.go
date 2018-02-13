@@ -9,13 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	hypervcommon "github.com/hashicorp/packer/builder/hyperv/common"
 	"github.com/hashicorp/packer/common"
-	"github.com/hashicorp/packer/packer"
+	"github.com/hashicorp/packer/helper/communicator"
 	"github.com/hashicorp/packer/helper/config"
 	"github.com/hashicorp/packer/helper/multistep"
+	"github.com/hashicorp/packer/packer"
 	"github.com/hashicorp/packer/template/interpolate"
 	pssh "github.com/mletterle/packer-builder-hyperv-ssh/powershell/ssh"
-	hypervcommon "github.com/hashicorp/packer/builder/hyperv/common"
 )
 
 const (
@@ -39,7 +40,7 @@ const (
 type Builder struct {
 	config Config
 	runner multistep.Runner
-	ps *pssh.PowershellSession
+	ps     *pssh.PowershellSession
 }
 
 type Config struct {
@@ -81,20 +82,28 @@ type Config struct {
 	VlanId                         string   `mapstructure:"vlan_id"`
 	Cpu                            uint     `mapstructure:"cpu"`
 	Generation                     uint     `mapstrucutre:"generation"`
-	EnableMacSpoofing              bool `mapstructure:"enable_mac_spoofing"`
-	EnableDynamicMemory            bool `mapstructure:"enable_dynamic_memory"`
-	EnableSecureBoot               bool `mapstructure:"enable_secure_boot"`
-	EnableVirtualizationExtensions bool `mapstructure:"enable_virtualization_extensions"`
+	EnableMacSpoofing              bool     `mapstructure:"enable_mac_spoofing"`
+	EnableDynamicMemory            bool     `mapstructure:"enable_dynamic_memory"`
+	EnableSecureBoot               bool     `mapstructure:"enable_secure_boot"`
+	EnableVirtualizationExtensions bool     `mapstructure:"enable_virtualization_extensions"`
+	AdditionalDiskSize             []uint   `mapstructure:"disk_additional_size"`
 	// New Configs
-	HyperVServer                   string `mapstructure:"hyperv_server"`
-	HyperVUsername                 string `mapstructure:"hyperv_username"`
-	HyperVPassword                 string `mapstructure:"hyperv_password"`
+	HyperVServer   string `mapstructure:"hyperv_server"`
+	HyperVUsername string `mapstructure:"hyperv_username"`
+	HyperVPassword string `mapstructure:"hyperv_password"`
 
 	Communicator string `mapstructure:"communicator"`
 
 	SkipCompaction bool `mapstructure:"skip_compaction"`
 
 	SkipExport bool `mapstructure:"skip_export"`
+
+	TempPath string `mapstructure:"temp_path"`
+
+	// A separate path can be used for storing the VM's disk image. The purpose is to enable
+	// reading and writing to take place on different physical disks (read from VHD temp path
+	// write to regular temp path while exporting the VM) to eliminate a single-disk bottleneck.
+	VhdTempPath string `mapstructure:"vhd_temp_path"`
 
 	ctx interpolate.Context
 }
@@ -129,17 +138,20 @@ func (b *Builder) Prepare(raws ...interface{}) ([]string, error) {
 	errs = packer.MultiErrorAppend(errs, b.config.ShutdownConfig.Prepare(&b.config.ctx)...)
 
 	if len(b.config.ISOConfig.ISOUrls) < 1 || (strings.ToLower(filepath.Ext(b.config.ISOConfig.ISOUrls[0])) != ".vhd" && strings.ToLower(filepath.Ext(b.config.ISOConfig.ISOUrls[0])) != ".vhdx") {
+		if b.config.DiskSize == 0 {
+			b.config.DiskSize = DefaultDiskSize
+		}
 		//We only create a new hard drive if an existing one to copy from does not exist
-/*		err = b.checkDiskSize()
+		/*		err = b.checkDiskSize()
+				if err != nil {
+					errs = packer.MultiErrorAppend(errs, err)
+				} */
+	}
+
+	/*	err = b.checkRamSize()
 		if err != nil {
 			errs = packer.MultiErrorAppend(errs, err)
 		} */
-	}
-
-/*	err = b.checkRamSize()
-	if err != nil {
-		errs = packer.MultiErrorAppend(errs, err)
-	} */
 
 	if b.config.VMName == "" {
 		b.config.VMName = fmt.Sprintf("packer-%s", b.config.PackerBuildName)
@@ -147,7 +159,7 @@ func (b *Builder) Prepare(raws ...interface{}) ([]string, error) {
 
 	log.Println(fmt.Sprintf("%s: %v", "VMName", b.config.VMName))
 
-/*	if b.config.SwitchName == "" {
+	/*	if b.config.SwitchName == "" {
 		b.config.SwitchName = b.detectSwitchName()
 	} */
 
@@ -166,7 +178,7 @@ func (b *Builder) Prepare(raws ...interface{}) ([]string, error) {
 		}
 	}
 
-/*	if len(b.config.AdditionalDiskSize) > 64 {
+	/*	if len(b.config.AdditionalDiskSize) > 64 {
 		err = errors.New("VM's currently support a maximun of 64 additional SCSI attached disks.")
 		errs = packer.MultiErrorAppend(errs, err)
 	} */
@@ -238,18 +250,18 @@ func (b *Builder) Prepare(raws ...interface{}) ([]string, error) {
 			errs = packer.MultiErrorAppend(errs, fmt.Errorf("There are not enough drive letters available for scsi (limited to 16), so we can't support these secondary dvds: %s", strings.Join(b.config.SecondaryDvdImages, ", ")))
 		}
 	}
-/*
-	if b.config.EnableVirtualizationExtensions {
-		hasVirtualMachineVirtualizationExtensions, err := powershell.HasVirtualMachineVirtualizationExtensions()
-		if err != nil {
-			errs = packer.MultiErrorAppend(errs, fmt.Errorf("Failed detecting virtual machine virtualization extensions support: %s", err))
-		} else {
-			if !hasVirtualMachineVirtualizationExtensions {
-				errs = packer.MultiErrorAppend(errs, fmt.Errorf("This version of Hyper-V does not support virtual machine virtualization extension. Please use Windows 10 or Windows Server 2016 or newer."))
+	/*
+		if b.config.EnableVirtualizationExtensions {
+			hasVirtualMachineVirtualizationExtensions, err := powershell.HasVirtualMachineVirtualizationExtensions()
+			if err != nil {
+				errs = packer.MultiErrorAppend(errs, fmt.Errorf("Failed detecting virtual machine virtualization extensions support: %s", err))
+			} else {
+				if !hasVirtualMachineVirtualizationExtensions {
+					errs = packer.MultiErrorAppend(errs, fmt.Errorf("This version of Hyper-V does not support virtual machine virtualization extension. Please use Windows 10 or Windows Server 2016 or newer."))
+				}
 			}
 		}
-	}
-*/
+	*/
 	// Warnings
 
 	if b.config.ShutdownCommand == "" {
@@ -258,11 +270,11 @@ func (b *Builder) Prepare(raws ...interface{}) ([]string, error) {
 				"will forcibly halt the virtual machine, which may result in data loss.")
 	}
 	warning := ""
-/*	warning := b.checkHostAvailableMemory()
-	if warning != "" {
-		warnings = appendWarnings(warnings, warning)
-	}
-*/
+	/*	warning := b.checkHostAvailableMemory()
+		if warning != "" {
+			warnings = appendWarnings(warnings, warning)
+		}
+	*/
 	if b.config.EnableVirtualizationExtensions {
 		if b.config.EnableDynamicMemory {
 			warning = fmt.Sprintf("For nested virtualization, when virtualization extension is enabled, dynamic memory should not be allowed.")
@@ -298,16 +310,174 @@ func (b *Builder) Prepare(raws ...interface{}) ([]string, error) {
 func (b *Builder) Run(ui packer.Ui, hook packer.Hook, cache packer.Cache) (packer.Artifact, error) {
 	ui.Say(fmt.Sprintf("Connecting to %s as %s...", b.config.HyperVServer, b.config.HyperVUsername))
 	b.ps = pssh.Connect(b.config.HyperVServer, b.config.HyperVUsername, b.config.HyperVPassword)
-	_, err := NewHypervPSSHDriver(b.ps)
+	driver, err := NewHypervPSSHDriver(b.ps)
 	if err != nil {
 		return nil, err
 	}
+
+	// Set up the state.
+	state := new(multistep.BasicStateBag)
+	state.Put("cache", cache)
+	state.Put("config", &b.config)
+	state.Put("debug", b.config.PackerDebug)
+	state.Put("driver", driver)
+	state.Put("hook", hook)
+	state.Put("ui", ui)
+
+	//Temporary states for missing steps
+	//TODO: Complete other steps
+	state.Put("packerTempDir", "$env:TEMP")
+	state.Put("packerVhdTempDir", "$env:TEMP")
+	iso_to_path := strings.Replace(strings.TrimPrefix(b.config.ISOUrls[0], "file://./"), "%5C", "\\", -1)
+	ui.Say(fmt.Sprintf("iso_url %s -> %s", b.config.ISOUrls[0], iso_to_path))
+	state.Put("iso_path", iso_to_path)
+
+	steps := []multistep.Step{
+		/*		&hypervcommon.StepCreateTempDir{
+					TempPath:    b.config.TempPath,
+					VhdTempPath: b.config.VhdTempPath,
+				},
+				&hypervcommon.StepOutputDir{
+					Force: b.config.PackerForce,
+					Path:  b.config.OutputDir,
+				},
+				&common.StepDownload{
+					Checksum:     b.config.ISOChecksum,
+					ChecksumType: b.config.ISOChecksumType,
+					Description:  "ISO",
+					ResultKey:    "iso_path",
+					Url:          b.config.ISOUrls,
+					Extension:    b.config.TargetExtension,
+					TargetPath:   b.config.TargetPath,
+				},
+				&common.StepCreateFloppy{
+					Files:       b.config.FloppyConfig.FloppyFiles,
+					Directories: b.config.FloppyConfig.FloppyDirectories,
+				},*/
+		&common.StepHTTPServer{
+			HTTPDir:     b.config.HTTPDir,
+			HTTPPortMin: b.config.HTTPPortMin,
+			HTTPPortMax: b.config.HTTPPortMax,
+		}, /*
+			&hypervcommon.StepCreateSwitch{
+				SwitchName: b.config.SwitchName,
+			}, */
+		&hypervcommon.StepCreateVM{
+			VMName:                         b.config.VMName,
+			SwitchName:                     b.config.SwitchName,
+			RamSize:                        b.config.RamSize,
+			DiskSize:                       b.config.DiskSize,
+			Generation:                     b.config.Generation,
+			Cpu:                            b.config.Cpu,
+			EnableMacSpoofing:              b.config.EnableMacSpoofing,
+			EnableDynamicMemory:            b.config.EnableDynamicMemory,
+			EnableSecureBoot:               b.config.EnableSecureBoot,
+			EnableVirtualizationExtensions: b.config.EnableVirtualizationExtensions,
+			AdditionalDiskSize:             b.config.AdditionalDiskSize,
+			DifferencingDisk:               b.config.DifferencingDisk,
+			SkipExport:                     b.config.SkipExport,
+			OutputDir:                      b.config.OutputDir,
+		},
+		&hypervcommon.StepEnableIntegrationService{},
+
+		&hypervcommon.StepMountDvdDrive{
+			Generation: b.config.Generation,
+		}, /*
+			&hypervcommon.StepMountFloppydrive{
+				Generation: b.config.Generation,
+			},
+
+			&hypervcommon.StepMountGuestAdditions{
+				GuestAdditionsMode: b.config.GuestAdditionsMode,
+				GuestAdditionsPath: b.config.GuestAdditionsPath,
+				Generation:         b.config.Generation,
+			},
+
+			&hypervcommon.StepMountSecondaryDvdImages{
+				IsoPaths:   b.config.SecondaryDvdImages,
+				Generation: b.config.Generation,
+			},
+
+			&hypervcommon.StepConfigureVlan{
+				VlanId:       b.config.VlanId,
+				SwitchVlanId: b.config.SwitchVlanId,
+			},
+		*/
+		&hypervcommon.StepRun{
+			BootWait: b.config.BootWait,
+		},
+
+		&hypervcommon.StepTypeBootCommand{
+			BootCommand: b.config.BootCommand,
+			SwitchName:  b.config.SwitchName,
+			Ctx:         b.config.ctx,
+		},
+		// configure the communicator ssh, winrm
+		&communicator.StepConnect{
+			Config:    &b.config.SSHConfig.Comm,
+			Host:      hypervcommon.CommHost,
+			SSHConfig: hypervcommon.SSHConfigFunc(&b.config.SSHConfig),
+		},
+
+		// provision requires communicator to be setup
+		&common.StepProvision{},
+		&hypervcommon.StepShutdown{
+			Command: b.config.ShutdownCommand,
+			Timeout: b.config.ShutdownTimeout,
+		},
+
+		// wait for the vm to be powered off
+		&hypervcommon.StepWaitForPowerOff{},
+
+		// remove the secondary dvd images
+		// after we power down
+		&hypervcommon.StepUnmountSecondaryDvdImages{},
+		&hypervcommon.StepUnmountGuestAdditions{},
+		&hypervcommon.StepUnmountDvdDrive{},
+		&hypervcommon.StepUnmountFloppyDrive{
+			Generation: b.config.Generation,
+		},
+		&hypervcommon.StepExportVm{
+			OutputDir:      b.config.OutputDir,
+			SkipCompaction: b.config.SkipCompaction,
+			SkipExport:     b.config.SkipExport,
+		},
+
+		// the clean up actions for each step will be executed reverse order
+	}
+
+	// Run the steps.
+	b.runner = common.NewRunner(steps, b.config.PackerConfig, ui)
+	b.runner.Run(state)
+
+	// Report any errors.
+	if rawErr, ok := state.GetOk("error"); ok {
+		b.ps.Disconnect()
+		return nil, rawErr.(error)
+	}
+
+	// If we were interrupted or cancelled, then just exit.
+	if _, ok := state.GetOk(multistep.StateCancelled); ok {
+		b.ps.Disconnect()
+		return nil, errors.New("Build was cancelled.")
+	}
+
+	if _, ok := state.GetOk(multistep.StateHalted); ok {
+		b.ps.Disconnect()
+		return nil, errors.New("Build was halted.")
+	}
+
 	b.ps.Disconnect()
-	return nil, nil
+
+	return hypervcommon.NewArtifact(b.config.OutputDir)
+
 }
 
 func (b *Builder) Cancel() {
-
+	if b.runner != nil {
+		log.Println("Cancelling the step runner...")
+		b.runner.Cancel()
+	}
 }
 
 func appendWarnings(slice []string, data ...string) []string {
