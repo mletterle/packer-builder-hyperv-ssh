@@ -215,15 +215,15 @@ func (b *Builder) Prepare(raws ...interface{}) ([]string, error) {
 		}
 	}
 
-	for _, isoPath := range b.config.SecondaryDvdImages {
-		if _, err := os.Stat(isoPath); os.IsNotExist(err) {
-			if err != nil {
-				errs = packer.MultiErrorAppend(
-					errs, fmt.Errorf("Secondary Dvd image does not exist: %s", err))
+	/*	for _, isoPath := range b.config.SecondaryDvdImages {
+			if _, err := os.Stat(isoPath); os.IsNotExist(err) {
+				if err != nil {
+					errs = packer.MultiErrorAppend(
+						errs, fmt.Errorf("Secondary Dvd image does not exist: %s", err))
+				}
 			}
 		}
-	}
-
+	*/
 	numberOfIsos := len(b.config.SecondaryDvdImages)
 
 	if b.config.GuestAdditionsMode == "attach" {
@@ -392,12 +392,12 @@ func (b *Builder) Run(ui packer.Ui, hook packer.Hook, cache packer.Cache) (packe
 				GuestAdditionsPath: b.config.GuestAdditionsPath,
 				Generation:         b.config.Generation,
 			},
-
-			&hypervcommon.StepMountSecondaryDvdImages{
-				IsoPaths:   b.config.SecondaryDvdImages,
-				Generation: b.config.Generation,
-			},
-
+		*/
+		&hypervcommon.StepMountSecondaryDvdImages{
+			IsoPaths:   b.config.SecondaryDvdImages,
+			Generation: b.config.Generation,
+		},
+		/*
 			&hypervcommon.StepConfigureVlan{
 				VlanId:       b.config.VlanId,
 				SwitchVlanId: b.config.SwitchVlanId,
