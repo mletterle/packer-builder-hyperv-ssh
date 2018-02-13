@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -55,7 +56,7 @@ func (ps *PowershellSession) Output(script string) (string, error) {
 		panic(err)
 	}
 	output, err := session.Output(encodedCommand(script))
-	str := string(output[:])
+	str := strings.TrimSuffix(strings.TrimSuffix(string(output[:]), "\n"), "\r")
 	log.Printf("ps-output: %s", str)
 	defer session.Close()
 	return str, err
