@@ -8,6 +8,7 @@ import (
 	pssh "github.com/mletterle/packer-builder-hyperv-ssh/powershell/ssh"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type HypervSSHDriver struct {
@@ -116,7 +117,19 @@ return $mac
 }
 
 // Finds the IP address of a VM connected that uses DHCP by its MAC address
+// This is only used in one place, in a tight loop, it seems to overwhelm
+// the ssh connection, so we try twice with a pause in between to give
+// it some breathing room
 func (d *HypervSSHDriver) IpAddress(macAddr string) (string, error) {
+	ip, err := d.getIpAddress(macAddr)
+	if ip == "" {
+		time.Sleep(30 * time.Second)
+		ip, err = d.getIpAddress(macAddr)
+	}
+	return ip, err
+}
+
+func (d *HypervSSHDriver) getIpAddress(macAddr string) (string, error) {
 	return d.runScript(`function IpAddress {
 param([string]$mac, [int]$addressIndex)
 try {
