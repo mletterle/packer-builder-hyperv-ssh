@@ -455,7 +455,7 @@ if ($harddrivePath){
 	New-VM -Name $vmName -Path $path -MemoryStartupBytes $memoryStartupBytes -VHDPath $vhdPath -SwitchName $switchName
 } else {
 	New-VM -Name $vmName -Path $path -MemoryStartupBytes $memoryStartupBytes -NewVHDPath $vhdPath -NewVHDSizeBytes $newVHDSizeBytes -SwitchName $switchName
-} } "%s" "%s" "%s" "%s" %d %d "%s" "%s"`, vmName, path, harddrivePath, vhdRoot, ram, diskSize, switchName, strconv.FormatBool(diffDisks)))
+} } CreateVMachine "%s" "%s" "%s" "%s" %d %d "%s" "%s"`, vmName, path, harddrivePath, vhdRoot, ram, diskSize, switchName, strconv.FormatBool(diffDisks)))
 		if err != nil {
 			return err
 		}
